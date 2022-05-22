@@ -6,65 +6,159 @@ Javascript Expression Language: Powerful context-based expression parser and eva
 
 Use it with promises or synchronously:
 
-```javascript
-const context = {
-  name: { first: 'Sterling', last: 'Archer' },
-  assoc: [
-    { first: 'Lana', last: 'Kane' },
-    { first: 'Cyril', last: 'Figgis' },
-    { first: 'Pam', last: 'Poovey' }
-  ],
-  age: 36
+import formulajs from '@formulajs/formulajs';
+import jexl from 'jexl';
+
+
+//把所有的formulajs支持的函数注册到jexl中
+for (var funName in formulajs) {
+    if (typeof (formulajs[funName]) == 'function') {
+        jexl.addFunction(funName, formulajs[funName]);
+    }
 }
 
-// Filter an array asynchronously...
-await const res = jexl.eval('assoc[.first == "Lana"].last', context)
-console.log(res) // Output: Kane
+//工具方法,返回集合是各元素的表达式的集合
+jexl.addTransform('AM', function (list = [], expression, property) {
+    if (property && expression) {
+        return list.map(item => {
+            let tmp = {...item};
+            tmp[property] = jexl.evalSync(expression, item)
+            return tmp;
+        });
+    } else if (expression) {
+        return list.map(item => jexl.evalSync(expression, item));
+    } else if (property) {
+        return list.map(item => {
+            return {[property]: item}
+        });
+    }
+    return list;
+});
 
-// Or synchronously!
-console.log(jexl.evalSync('assoc[.first == "Lana"].last')) // Output: Kane
+//工具方法,集合元素本身的过滤，表示示中以_表示元素本身
+jexl.addTransform('AF', function (list = [], filterExpr) {
+    var result = new Array();
+    list.forEach(item => {
+        let bl = jexl.evalSync(filterExpr, {_: item})
+        if (bl) {
+            result.push(item);
+        }
+    });
+    return result;
+});
 
-// Do math
-await jexl.eval('age * (3 - 1)', context)
-// 72
+//根据用户信息返回用户的邮寄地址
+jexl.addFunction('getPostAddress', function (user) {
+    return user.username + ' ' + user.address.province + ' ' + user.address.city;
+});
 
-// Concatenate
-await jexl.eval('name.first + " " + name["la" + "st"]', context)
-// "Sterling Archer"
+//根据用户信息格式化用户显示
+jexl.addTransform('userTrans', function (user, showPhone) {
+    return '姓名:' + user.username + ' 性别:' + user.sex + ' 年龄:' + user.age + (showPhone ? ' 电话:' + user.telephone : '');
+});
 
-// Compound
-await jexl.eval(
-  'assoc[.last == "Figgis"].first == "Cyril" && assoc[.last == "Poovey"].first == "Pam"',
-  context
-)
-// true
+//根据用户ID返回用户的账户金额
+jexl.addFunction('getUserAmtById', async function (userId) {
+    return new Promise((resolve, reject) => {
+        //模拟到服务器异步取数
+        setTimeout(function () {
+            if (userId == 'USR0001') {
+                resolve(120);
+            } else {
+                resolve(180);
+            }
+        }, 1000)
+    });
+});
 
-// Use array indexes
-await jexl.eval('assoc[1]', context)
-// { first: 'Cyril', last: 'Figgis' }
+let context = {
+    orderId: 'SEQ0000001',
+    orderDate: new Date(),
+    data: [3, 13, 24, 7, 56],
+    user: {
+        userId: 'USR0001',
+        username: '张三',
+        age: 18,
+        sex: 'male',
+        address: {
+            province: '湖北',
+            city: '武汉'
+        },
+        telephone: '13552313725'
+    },
+    orderItems: [{
+        productId: 'prd0001',
+        productName: '洗发水',
+        price: 12,
+        number: 1,
+        discount: 0.9
+    }, {
+        productId: 'prd0002',
+        productName: '沐浴露',
+        price: 24.5,
+        number: 2,
+        discount: 0.85
+    }, {
+        productId: 'prd0003',
+        productName: '苹果',
+        price: 5,
+        number: 5,
+        discount: 1
+    }]
+};
 
-// Use conditional logic
-await jexl.eval('age > 62 ? "retired" : "working"', context)
-// "working"
+console.log("格式化用户信息");
+let userInfo = jexl.evalSync('user|userTrans(false)', context);
+console.log(userInfo);
+console.log("****************************************************");
 
-// Transform
-jexl.addTransform('upper', (val) => val.toUpperCase())
-await jexl.eval('"duchess"|upper + " " + name.last|upper', context)
-// "DUCHESS ARCHER"
+console.log("订单总价多少钱");
+let totalPrice = jexl.evalSync('SUM(orderItems|AM("price*number*discount"))', context);
+console.log(totalPrice);
+console.log("****************************************************");
 
-// Transform asynchronously, with arguments
-jexl.addTransform('getStat', async (val, stat) => dbSelectByLastName(val, stat))
-try {
-  const res = await jexl.eval('name.last|getStat("weight")', context)
-  console.log(res) // Output: 184
-} catch (e) {
-  console.log('Database Error', e.stack)
-}
+console.log("本次订单中商品单价大于10的商品名称");
+let products = jexl.evalSync('orderItems[.price > 10]|AM("productName")', context)
+console.log(products);
+console.log("****************************************************");
 
-// Functions too, sync or async, args or no args
-jexl.addFunction('getOldestAgent', () => db.getOldestAgent())
-await jexl.eval('age == getOldestAgent().age', context)
-// false
+console.log("拼接完整的收货地址");
+let postAddress = jexl.evalSync("getPostAddress(user)", context);
+console.info(postAddress)
+console.log("****************************************************");
+
+console.log("判断用户账户余额是不是够用");
+let hasMoney = await jexl.eval('SUM(orderItems|AM("price*number*discount"))<=getUserAmtById(user.userId)', context);
+console.info(hasMoney);
+console.log("****************************************************");
+
+console.log("生成各订单项目的价钱，返回集");
+let goodList = jexl.evalSync('orderItems|AM("price*number*discount","money")', context);
+console.info(goodList)
+console.log("****************************************************");
+
+console.info("返回订单项单项价大于30的")
+let sublist = jexl.evalSync('orderItems|AM("price*number*discount","money")[.money>30]', context)
+console.info(sublist)
+
+console.log("****************************************************");
+
+console.info("集合元素直接过滤,通过AM方式")
+let data = jexl.evalSync('data|AM(undefined,"value")[.value>20]|AM("value")', context);
+console.info(data)
+
+console.log("****************************************************");
+
+console.info("集合元素直接过滤,通过AF方式")
+let data2 = jexl.evalSync('data|AF("_>20")', context);
+console.info(data2)
+
+console.log("****************************************************");
+
+console.info("集合元素直接过滤,通过AF方式过滤属性")
+let data3 = jexl.evalSync('orderItems|AF("_.price>20 || _.number==5")', context);
+console.info(data3)
+
 
 // Add your own (a)synchronous operators
 // Here's a case-insensitive string equality
